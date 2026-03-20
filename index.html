@@ -138,6 +138,27 @@
             pointer-events: none;
         }
 
+        #breakpoint-msg {
+            position: absolute;
+            top: 25%;
+            width: 100%;
+            text-align: center;
+            font-size: 48px;
+            font-weight: 900;
+            color: #ffeb3b;
+            -webkit-text-stroke: 2.5px #543847;
+            z-index: 6;
+            opacity: 0;
+            transform: scale(0.8);
+            transition: opacity 0.3s, transform 0.3s cubic-bezier(0.175, 0.885, 0.32, 1.275);
+            pointer-events: none;
+        }
+
+        #breakpoint-msg.visible {
+            opacity: 1;
+            transform: scale(1);
+        }
+
         .instructions {
             color: white;
             font-weight: bold;
@@ -153,6 +174,7 @@
     <canvas id="gameCanvas"></canvas>
     
     <div id="live-score">0</div>
+    <div id="breakpoint-msg">REST ZONE!</div>
 
     <!-- Start Screen -->
     <div id="start-screen" class="overlay">
@@ -177,7 +199,7 @@
 
 <script>
 /**
- * Flappy Bird Ultra - Pure JS implementation
+ * Flappy Bird - Pure JS implementation
  */
 
 const canvas = document.getElementById('gameCanvas');
@@ -185,42 +207,45 @@ const ctx = canvas.getContext('2d');
 const startScreen = document.getElementById('start-screen');
 const gameOverScreen = document.getElementById('game-over-screen');
 const liveScoreEl = document.getElementById('live-score');
+const breakpointMsgEl = document.getElementById('breakpoint-msg');
 const finalScoreEl = document.getElementById('final-score');
 const bestScoreEl = document.getElementById('best-score');
 const startBtn = document.getElementById('start-btn');
 const restartBtn = document.getElementById('restart-btn');
 
 // Game Constants
-const GRAVITY = 0.3;          // Slightly stronger gravity for snappier feel
-const FLAP_STRENGTH = -7.5;   // Increased to go up more on each jump
-const PIPE_SPEED = 3.5;       // Speed adjusted for larger screens
-const PIPE_SPAWN_RATE = 90;   // Spawns slightly faster
-const PIPE_GAP = 180;         // Adjusted gap for new jump height
-const BIRD_X = 100;           // Moved slightly right for wide screens
+const GRAVITY = 0.3;          
+const FLAP_STRENGTH = -7.5;   
+const PIPE_SPEED = 3.5;       
+const PIPE_SPAWN_RATE = 90;   
+const PIPE_GAP = 180;         
+const BIRD_X = 100;           
+const REST_ZONE_DURATION = 240; 
 
 // Game State
 let bird = {
     x: BIRD_X,
     y: 0,
     velocity: 0,
-    radius: 18,               // Slightly larger bird for better visibility
+    radius: 18,               
     rotation: 0
 };
 
 let pipes = [];
 let frameCount = 0;
 let score = 0;
+let pipesSpawnedCount = 0; // Tracks how many pipes have actually entered the screen
 let highScore = localStorage.getItem('flappyBest') || 0;
 let gameState = 'START'; 
 let groundOffset = 0;
 let backgroundOffset = 0;
 let groundHeight = 100;
+let spawnPausedTimer = 0;
 
-// Set up Canvas size to fill screen
 function resize() {
     canvas.width = window.innerWidth;
     canvas.height = window.innerHeight;
-    groundHeight = canvas.height * 0.15; // Ground is always 15% of screen height
+    groundHeight = canvas.height * 0.15; 
     if (gameState === 'START') {
         bird.y = canvas.height / 2;
     }
@@ -229,7 +254,6 @@ function resize() {
 window.addEventListener('resize', resize);
 resize();
 
-// Input Handling
 function flap() {
     if (gameState === 'PLAYING') {
         bird.velocity = FLAP_STRENGTH;
@@ -271,7 +295,10 @@ function resetGame() {
     bird.rotation = 0;
     pipes = [];
     score = 0;
+    pipesSpawnedCount = 0;
     frameCount = 0;
+    spawnPausedTimer = 0;
+    breakpointMsgEl.classList.remove('visible');
     liveScoreEl.innerText = '0';
     gameState = 'PLAYING';
     gameOverScreen.style.display = 'none';
@@ -288,28 +315,23 @@ function gameOver() {
     bestScoreEl.innerText = highScore;
     gameOverScreen.style.display = 'flex';
     liveScoreEl.style.display = 'none';
+    breakpointMsgEl.classList.remove('visible');
 }
 
-// Drawing Functions
 function drawBird() {
     ctx.save();
     ctx.translate(bird.x, bird.y);
-    
-    // Smooth rotation based on velocity
     bird.rotation = Math.min(Math.PI / 3, Math.max(-Math.PI / 4, bird.velocity * 0.08));
     ctx.rotate(bird.rotation);
 
-    // Bird Body (Yellow)
     ctx.fillStyle = '#f7d308';
     ctx.strokeStyle = '#543847';
     ctx.lineWidth = 3;
-    
     ctx.beginPath();
     ctx.arc(0, 0, bird.radius, 0, Math.PI * 2);
     ctx.fill();
     ctx.stroke();
 
-    // Eye
     ctx.fillStyle = 'white';
     ctx.beginPath();
     ctx.arc(8, -6, 6, 0, Math.PI * 2);
@@ -321,14 +343,12 @@ function drawBird() {
     ctx.arc(10, -6, 2.5, 0, Math.PI * 2);
     ctx.fill();
 
-    // Wing
     ctx.fillStyle = 'white';
     ctx.beginPath();
     ctx.ellipse(-8, 3, 10, 6, bird.rotation * -1, 0, Math.PI * 2);
     ctx.fill();
     ctx.stroke();
 
-    // Beak
     ctx.fillStyle = '#f75d10';
     ctx.beginPath();
     ctx.moveTo(12, 0);
@@ -343,9 +363,7 @@ function drawBird() {
 
 function drawPipes() {
     pipes.forEach(pipe => {
-        // Top Pipe
         drawPipeSegment(pipe.x, 0, pipe.top, true);
-        // Bottom Pipe
         drawPipeSegment(pipe.x, pipe.top + PIPE_GAP, canvas.height - (pipe.top + PIPE_GAP + groundHeight), false);
     });
 }
@@ -353,51 +371,33 @@ function drawPipes() {
 function drawPipeSegment(x, y, h, isTop) {
     const pipeWidth = 80;
     const headHeight = 35;
-
     ctx.fillStyle = '#73be2e';
     ctx.strokeStyle = '#543847';
     ctx.lineWidth = 3;
-
-    // Pipe body
     ctx.fillRect(x, y, pipeWidth, h);
     ctx.strokeRect(x, y, pipeWidth, h);
-
-    // Pipe Head
     const headY = isTop ? y + h - headHeight : y;
     ctx.fillStyle = '#73be2e';
     ctx.fillRect(x - 8, headY, pipeWidth + 16, headHeight);
     ctx.strokeRect(x - 8, headY, pipeWidth + 16, headHeight);
-
-    // Shadows and Highlights
     ctx.fillStyle = 'rgba(255,255,255,0.3)';
     ctx.fillRect(x + 8, y, 12, h);
-    ctx.fillStyle = 'rgba(0,0,0,0.1)';
-    ctx.fillRect(x + pipeWidth - 20, y, 12, h);
 }
 
 function drawBackground() {
-    // Skyline
     ctx.fillStyle = '#4dbbca';
     backgroundOffset = (backgroundOffset - 0.8) % 400;
     for (let i = 0; i < canvas.width + 400; i += 400) {
         ctx.fillRect(i + backgroundOffset, canvas.height - groundHeight - 200, 150, 200);
         ctx.fillRect(i + 80 + backgroundOffset, canvas.height - groundHeight - 160, 120, 160);
-        ctx.fillRect(i + 220 + backgroundOffset, canvas.height - groundHeight - 120, 100, 120);
     }
-
-    // Ground
     ctx.fillStyle = '#ded895';
     ctx.fillRect(0, canvas.height - groundHeight, canvas.width, groundHeight);
-    
-    // Ground striping
     ctx.fillStyle = '#9ce659';
     ctx.fillRect(0, canvas.height - groundHeight, canvas.width, 20);
-    
     ctx.strokeStyle = '#543847';
     ctx.lineWidth = 4;
     ctx.strokeRect(-5, canvas.height - groundHeight, canvas.width + 10, groundHeight + 5);
-
-    // Animated ground lines
     groundOffset = (groundOffset - PIPE_SPEED) % 30;
     ctx.beginPath();
     ctx.setLineDash([15, 15]);
@@ -407,52 +407,65 @@ function drawBackground() {
     ctx.setLineDash([]);
 }
 
-// Game Logic
 function update() {
     if (gameState === 'PLAYING') {
         frameCount++;
 
-        // Bird Physics
         bird.velocity += GRAVITY;
         bird.y += bird.velocity;
 
-        // Collision: Floor
         if (bird.y + bird.radius > canvas.height - groundHeight) {
             gameOver();
         }
-        // Collision: Ceiling
         if (bird.y - bird.radius < 0) {
             bird.y = bird.radius;
             bird.velocity = 0;
         }
 
-        // Pipe Management
-        if (frameCount % PIPE_SPAWN_RATE === 0) {
-            const minPipeHeight = 100;
-            const maxPipeHeight = canvas.height - groundHeight - PIPE_GAP - minPipeHeight;
-            const topHeight = Math.floor(Math.random() * (maxPipeHeight - minPipeHeight + 1)) + minPipeHeight;
-            pipes.push({ x: canvas.width, top: topHeight, passed: false });
+        // Pipe Spawning Logic
+        if (spawnPausedTimer > 0) {
+            spawnPausedTimer--;
+            if (spawnPausedTimer === 0) {
+                breakpointMsgEl.classList.remove('visible');
+                frameCount = 1; 
+            }
+        } else {
+            // Only spawn if we haven't already prepared 10 pipes for the current round
+            if (frameCount % PIPE_SPAWN_RATE === 0 && pipesSpawnedCount < 10) {
+                const minPipeHeight = 100;
+                const maxPipeHeight = canvas.height - groundHeight - PIPE_GAP - minPipeHeight;
+                const topHeight = Math.floor(Math.random() * (maxPipeHeight - minPipeHeight + 1)) + minPipeHeight;
+                pipes.push({ x: canvas.width, top: topHeight, passed: false });
+                pipesSpawnedCount++;
+            }
         }
 
         pipes.forEach((pipe, index) => {
             pipe.x -= PIPE_SPEED;
 
-            // Collision Detection
             const pipeWidth = 80;
+            // Collision
             if (bird.x + bird.radius - 5 > pipe.x && bird.x - bird.radius + 5 < pipe.x + pipeWidth) {
                 if (bird.y - bird.radius + 5 < pipe.top || bird.y + bird.radius - 5 > pipe.top + PIPE_GAP) {
                     gameOver();
                 }
             }
 
-            // Score check
+            // Scoring
             if (!pipe.passed && pipe.x + pipeWidth < bird.x) {
                 score++;
                 pipe.passed = true;
                 liveScoreEl.innerText = score;
+
+                // When the 10th pipe of the round is passed, trigger rest zone
+                if (score > 0 && score % 10 === 0) {
+                    spawnPausedTimer = REST_ZONE_DURATION;
+                    pipesSpawnedCount = 0; // Reset counter for next set of 10
+                    breakpointMsgEl.innerText = `${score} POINT REST ZONE!`;
+                    breakpointMsgEl.classList.add('visible');
+                }
             }
 
-            // Remove off-screen pipes
             if (pipe.x + pipeWidth < -100) {
                 pipes.splice(index, 1);
             }
